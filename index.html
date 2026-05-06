@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InvoicePro</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/lucide-react@0.383.0/dist/umd/lucide-react.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%;overflow:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;background:#f8fafc;color:#1e293b}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+input,select,textarea{font-family:inherit;font-size:13px;border:1px solid #e2e8f0;border-radius:8px;padding:7px 10px;width:100%;outline:none;background:#fff;color:#1e293b;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.1)}
+input[type=range]{border:none;padding:0;height:4px;accent-color:#3b82f6;background:transparent;box-shadow:none}
+button{font-family:inherit;cursor:pointer;border:none;outline:none}
+table{border-collapse:collapse;width:100%}
+@media print{
+  .no-print{display:none!important}
+  body{overflow:visible!important}
+  #root{overflow:visible!important}
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const{useState,useEffect,useMemo,useRef,useCallback,useReducer}=React;
+const{BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer}=Recharts;
+const{LayoutDashboard,FileText,Receipt,ScrollText,Boxes,Users,PlusCircle,X,Download,Upload,Trash2,Edit2,Printer,Search,TrendingUp,AlertCircle,Clock,CheckCircle2,ChevronRight,DollarSign}=lucideReact;
+
+const VAT=0.20;
+const FX={GBP:1,USD:0.79,EUR:0.86,CAD:0.58,AUD:0.52,CHF:0.90,JPY:0.0053,SEK:0.074,NOK:0.074,DKK:0.115};
+const CCYS=["GBP","USD","EUR","CAD","AUD","CHF","JPY"];
+const EMPTY={invoices:[],bills:[],sows:[],deliverables:[]};
+const STORAGE_KEY="invoicepro-v1";
+
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,10)}
+function toGbp(n,ccy){return n*(FX[ccy]??1)}
+function subTotal(items){return items.reduce((s,i)=>s+(+i.qty||0)*(+i.rate||0),0)}
+function calcTotal(items){return subTotal(items)*(1+VAT)}
+function fmt(n,ccy="GBP"){try{return new Intl.NumberFormat("en-GB",{style:"currency",currency:ccy,minimumFractionDigits:2}).format(n)}catch{return`${ccy} ${n.toFixed(2)}`}}
+function fmtDate(d){if(!d)return"—";try{return new Date(d+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}catch{return d}}
+function today(){return new Date().toISOString().slice(0,10)}
+function nowIso(){return new Date().toISOString()}
+
+function loadData(){try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):EMPTY}catch{return EMPTY}}
+function saveData(d){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d))}catch{}}
+
+const INV_C={paid:"#059669",pending:"#d97706",overdue:"#dc2626",draft:"#64748b"};
+const INV_BG={paid:"#ecfdf5",pending:"#fffbeb",overdue:"#fef2f2",draft:"#f8fafc"};
+const BILL_C={paid:"#059669",unpaid:"#d97706",overdue:"#dc2626"};
+const BILL_BG={paid:"#ecfdf5",unpaid:"#fffbeb",overdue:"#fef2f2"};
+const SOW_C={draft:"#64748b",active:"#2563eb",completed:"#059669",cancelled:"#dc2626"};
+const SOW_BG={draft:"#f8fafc",active:"#eff6ff",completed:"#ecfdf5",cancelled:"#fef2f2"};
+const DEL_C={active:"#2563eb",paused:"#d97706",completed:"#059669","on-hold":"#ea580c",blocked:"#dc2626",invoiced:"#7c3aed"};
+const DEL_BG={active:"#eff6ff",paused:"#fffbeb",completed:"#ecfdf5","on-hold":"#fff7ed",blocked:"#fef2f2",invoiced:"#f5f3ff"};
+
+function Badge({s,c,bg}){return React.createElement("span",{style:{display:"inline-flex",alignItems:"center",padding:"2px 8px",borderRadius:12,fontSize:11,fontWeight:600,color:c,background:bg,textTransform:"capitalize",whiteSpace:"nowrap"}},s)}
+function InvBadge({status}){return React.createElement(Badge,{s:status,c:INV_C[status]??"#64748b",bg:INV_BG[status]??"#f8fafc"})}
+function BillBadge({status}){return React.createElement(Badge,{s:status,c:BILL_C[status]??"#64748b",bg:BILL_BG[status]??"#f8fafc"})}
+function SowBadge({status}){return React.createElement(Badge,{s:status,c:SOW_C[status]??"#64748b",bg:SOW_BG[status]??"#f8fafc"})}
+function DelBadge({status}){return React.createElement(Badge,{s:status,c:DEL_C[status]??"#64748b",bg:DEL_BG[status]??"#f8fafc"})}
+
+function Btn({onClick,variant="primary",size="md",disabled,children,style:{}}={}){
+  const sz={sm:{padding:"5px 10px",fontSize:12},md:{padding:"8px 14px",fontSize:13},lg:{padding:"10px 18px",fontSize:14}};
+  const v={primary:{background:"#3b82f6",color:"#fff"},secondary:{background:"#fff",color:"#374151",border:"1px solid #e2e8f0"},danger:{background:"#ef4444",color:"#fff"},ghost:{background:"transparent",color:"#6b7280"}};
+  return React.createElement("button",{onClick,disabled,style:{display:"inline-flex",alignItems:"center",gap:6,fontFamily:"inherit",fontWeight:500,borderRadius:8,cursor:disabled?"not-allowed":"pointer",border:"none",outline:"none",opacity:disabled?.5:1,transition:"background .15s",...sz[size],...v[variant],...(arguments[0].style||{})}},children)
+}
+
+function Modal({title,onClose,children,wide}){
+  useEffect(()=>{const h=e=>{if(e.key==="Escape")onClose()};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h)},[]);
+  return React.createElement("div",{onClick:onClose,style:{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+    React.createElement("div",{onClick:e=>e.stopPropagation(),style:{background:"#fff",borderRadius:12,boxShadow:"0 20px 60px rgba(0,0,0,.25)",display:"flex",flexDirection:"column",maxHeight:"90vh",width:"100%",maxWidth:wide?760:520}},
+      React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",borderBottom:"1px solid #f1f5f9"}},
+        React.createElement("h2",{style:{fontSize:16,fontWeight:600,color:"#1e293b"}},title),
+        React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,display:"flex"}},React.createElement(X,{size:18}))),
+      React.createElement("div",{style:{overflowY:"auto",flex:1,padding:"16px 20px"}},children)))
+}
+
+function Field({label,required,children}){
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:4}},
+    React.createElement("label",{style:{fontSize:12,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:.5}},label,required&&React.createElement("span",{style:{color:"#ef4444",marginLeft:2}},"*")),children)
+}
+function Inp(p){return React.createElement("input",p)}
+function Sel({children,...p}){return React.createElement("select",p,children)}
+function Tex(p){return React.createElement("textarea",{rows:3,...p})}
+
+function StatCard({label,value,sub,Icon,color="#3b82f6",bgColor="#eff6ff"}){
+  return React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",padding:16,display:"flex",alignItems:"flex-start",gap:12}},
+    React.createElement("div",{style:{borderRadius:10,padding:10,background:bgColor,color,flexShrink:0}},React.createElement(Icon,{size:18})),
+    React.createElement("div",null,
+      React.createElement("p",{style:{fontSize:12,color:"#64748b",marginBottom:2}},label),
+      React.createElement("p",{style:{fontSize:20,fontWeight:700,color:"#1e293b",lineHeight:1}},value),
+      sub&&React.createElement("p",{style:{fontSize:11,color:"#94a3b8",marginTop:3}},sub)))
+}
+
+function InvoiceForm({initial,onSave,onClose}){
+  const[f,setF]=useState(initial??{invoiceNumber:"",client:"",email:"",address:"",status:"pending",currency:"GBP",issueDate:today(),dueDate:"",notes:"",items:[{id:uid(),desc:"",qty:1,rate:0}]});
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const setItem=(i,k,v)=>setF(p=>{const it=[...p.items];it[i]={...it[i],[k]:v};return{...p,items:it}});
+  const addItem=()=>setF(p=>({...p,items:[...p.items,{id:uid(),desc:"",qty:1,rate:0}]}));
+  const removeItem=i=>setF(p=>({...p,items:p.items.filter((_,j)=>j!==i)}));
+  const sub=subTotal(f.items),vat=sub*VAT,tot=sub+vat;
+  const save=()=>{if(!f.invoiceNumber.trim()||!f.client.trim())return alert("Invoice number and client are required");onSave({...f,total:tot,createdAt:f.createdAt??nowIso()})};
+  const g={display:"grid",gridTemplateColumns:"1fr 1fr",gap:12};
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+    React.createElement("div",{style:g},
+      React.createElement(Field,{label:"Invoice #",required},React.createElement(Inp,{value:f.invoiceNumber,onChange:e=>set("invoiceNumber",e.target.value),placeholder:"INV-001"})),
+      React.createElement(Field,{label:"Status"},React.createElement(Sel,{value:f.status,onChange:e=>set("status",e.target.value)},["draft","pending","paid","overdue"].map(s=>React.createElement("option",{key:s,value:s},s))))),
+    React.createElement("div",{style:g},
+      React.createElement(Field,{label:"Client",required},React.createElement(Inp,{value:f.client,onChange:e=>set("client",e.target.value)})),
+      React.createElement(Field,{label:"Currency"},React.createElement(Sel,{value:f.currency,onChange:e=>set("currency",e.target.value)},CCYS.map(c=>React.createElement("option",{key:c,value:c},c))))),
+    React.createElement("div",{style:g},
+      React.createElement(Field,{label:"Issue Date"},React.createElement(Inp,{type:"date",value:f.issueDate,onChange:e=>set("issueDate",e.target.value)})),
+      React.createElement(Field,{label:"Due Date"},React.createElement(Inp,{type:"date",value:f.dueDate,onChange:e=>set("dueDate",e.target.value)}))),
+    React.createElement(Field,{label:"Email"},React.createElement(Inp,{type:"email",value:f.email,onChange:e=>set("email",e.target.value),placeholder:"client@example.com"})),
+    React.createElement(Field,{label:"Address"},React.createElement(Tex,{value:f.address,onChange:e=>set("address",e.target.value),rows:2})),
+    React.createElement("div",null,
+      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},
+        React.createElement("label",{style:{fontSize:12,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:.5}},"Line Items"),
+        React.createElement(Btn,{variant:"ghost",size:"sm",onClick:addItem},React.createElement(PlusCircle,{size:13}),"Add Item")),
+      React.createElement("div",{style:{border:"1px solid #e2e8f0",borderRadius:8,overflow:"hidden"}},
+        React.createElement("table",null,
+          React.createElement("thead",null,React.createElement("tr",{style:{background:"#f8fafc"}},
+            React.createElement("th",{style:{textAlign:"left",padding:"8px 12px",fontSize:11,color:"#64748b",fontWeight:600}},"Description"),
+            React.createElement("th",{style:{textAlign:"right",padding:"8px 12px",fontSize:11,color:"#64748b",fontWeight:600,width:60}},"Qty"),
+            React.createElement("th",{style:{textAlign:"right",padding:"8px 12px",fontSize:11,color:"#64748b",fontWeight:600,width:90}},"Rate"),
+            React.createElement("th",{style:{textAlign:"right",padding:"8px 12px",fontSize:11,color:"#64748b",fontWeight:600,width:90}},"Amount"),
+            React.createElement("th",{style:{width:32}}))),
+          React.createElement("tbody",null,f.items.map((item,i)=>React.createElement("tr",{key:item.id,style:{borderTop:"1px solid #f1f5f9"}},
+            React.createElement("td",{style:{padding:"6px 12px"}},React.createElement("input",{style:{border:"none",outline:"none",width:"100%",fontSize:13,background:"transparent"},value:item.desc,onChange:e=>setItem(i,"desc",e.target.value),placeholder:"Description..."})),
+            React.createElement("td",{style:{padding:"6px 8px"}},React.createElement("input",{style:{border:"none",outline:"none",width:"100%",fontSize:13,textAlign:"right",background:"transparent"},type:"number",min:0,value:item.qty,onChange:e=>setItem(i,"qty",e.target.value)})),
+            React.createElement("td",{style:{padding:"6px 8px"}},React.createElement("input",{style:{border:"none",outline:"none",width:"100%",fontSize:13,textAlign:"right",background:"transparent"},type:"number",min:0,step:.01,value:item.rate,onChange:e=>setItem(i,"rate",e.target.value)})),
+            React.createElement("td",{style:{padding:"6px 12px",textAlign:"right",fontSize:13,color:"#475569"}},fmt((+item.qty||0)*(+item.rate||0),f.currency)),
+            React.createElement("td",{style:{padding:"6px 4px"}},f.items.length>1&&React.createElement("button",{onClick:()=>removeItem(i),style:{background:"none",border:"none",cursor:"pointer",color:"#cbd5e1",display:"flex",alignItems:"center"}},React.createElement(X,{size:14})))))))),
+      React.createElement("div",{style:{marginTop:10,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3}},
+        React.createElement("div",{style:{display:"flex",gap:40,fontSize:13,color:"#64748b"}},React.createElement("span",null,"Subtotal"),React.createElement("span",null,fmt(sub,f.currency))),
+        React.createElement("div",{style:{display:"flex",gap:40,fontSize:13,color:"#64748b"}},React.createElement("span",null,"VAT (20%)"),React.createElement("span",null,fmt(vat,f.currency))),
+        React.createElement("div",{style:{display:"flex",gap:40,fontSize:14,fontWeight:700,color:"#1e293b",borderTop:"1px solid #e2e8f0",paddingTop:6,marginTop:4}},React.createElement("span",null,"Total"),React.createElement("span",null,fmt(tot,f.currency))))),
+    React.createElement(Field,{label:"Notes"},React.createElement(Tex,{value:f.notes,onChange:e=>set("notes",e.target.value),placeholder:"Payment terms, notes..."})),
+    React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:8}},React.createElement(Btn,{variant:"secondary",onClick:onClose},"Cancel"),React.createElement(Btn,{onClick:save},"Save Invoice")))
+}
+
+function BillForm({initial,onSave,onClose}){
+  const[f,setF]=useState(initial??{vendor:"",reference:"",amount:"",currency:"GBP",billDate:today(),dueDate:"",status:"unpaid",notes:""});
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const save=()=>{if(!f.vendor.trim())return alert("Vendor is required");if(!f.amount)return alert("Amount is required");onSave({...f,amount:+f.amount,createdAt:f.createdAt??nowIso()})};
+  const g={display:"grid",gridTemplateColumns:"1fr 1fr",gap:12};
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+    React.createElement("div",{style:g},React.createElement(Field,{label:"Vendor",required},React.createElement(Inp,{value:f.vendor,onChange:e=>set("vendor",e.target.value)})),React.createElement(Field,{label:"Reference"},React.createElement(Inp,{value:f.reference,onChange:e=>set("reference",e.target.value),placeholder:"REF-001"}))),
+    React.createElement("div",{style:g},React.createElement(Field,{label:"Amount",required},React.createElement(Inp,{type:"number",min:0,step:.01,value:f.amount,onChange:e=>set("amount",e.target.value)})),React.createElement(Field,{label:"Currency"},React.createElement(Sel,{value:f.currency,onChange:e=>set("currency",e.target.value)},CCYS.map(c=>React.createElement("option",{key:c,value:c},c))))),
+    React.createElement("div",{style:g},React.createElement(Field,{label:"Bill Date"},React.createElement(Inp,{type:"date",value:f.billDate,onChange:e=>set("billDate",e.target.value)})),React.createElement(Field,{label:"Due Date"},React.createElement(Inp,{type:"date",value:f.dueDate,onChange:e=>set("dueDate",e.target.value)}))),
+    React.createElement(Field,{label:"Status"},React.createElement(Sel,{value:f.status,onChange:e=>set("status",e.target.value)},["unpaid","paid","overdue"].map(s=>React.createElement("option",{key:s,value:s},s)))),
+    React.createElement(Field,{label:"Notes"},React.createElement(Tex,{value:f.notes,onChange:e=>set("notes",e.target.value)})),
+    React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:8}},React.createElement(Btn,{variant:"secondary",onClick:onClose},"Cancel"),React.createElement(Btn,{onClick:save},"Save Bill")))
+}
+
+function SowForm({initial,onSave,onClose}){
+  const[f,setF]=useState(initial??{title:"",client:"",reference:"",description:"",value:"",currency:"GBP",startDate:"",endDate:"",status:"draft",notes:""});
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const save=()=>{if(!f.title.trim()||!f.client.trim())return alert("Title and client are required");onSave({...f,value:f.value?+f.value:null,createdAt:f.createdAt??nowIso()})};
+  const g={display:"grid",gridTemplateColumns:"1fr 1fr",gap:12};
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+    React.createElement(Field,{label:"Title",required},React.createElement(Inp,{value:f.title,onChange:e=>set("title",e.target.value)})),
+    React.createElement("div",{style:g},React.createElement(Field,{label:"Client",required},React.createElement(Inp,{value:f.client,onChange:e=>set("client",e.target.value)})),React.createElement(Field,{label:"Reference"},React.createElement(Inp,{value:f.reference,onChange:e=>set("reference",e.target.value)}))),
+    React.createElement("div",{style:g},React.createElement(Field,{label:"Value"},React.createElement(Inp,{type:"number",min:0,step:.01,value:f.value,onChange:e=>set("value",e.target.value)})),React.createElement(Field,{label:"Currency"},React.createElement(Sel,{value:f.currency,onChange:e=>set("currency",e.target.value)},CCYS.map(c=>React.createElement("option",{key:c,value:c},c))))),
+    React.createElement("div",{style:g},React.createElement(Field,{label:"Start Date"},React.createElement(Inp,{type:"date",value:f.startDate,onChange:e=>set("startDate",e.target.value)})),React.createElement(Field,{label:"End Date"},React.createElement(Inp,{type:"date",value:f.endDate,onChange:e=>set("endDate",e.target.value)}))),
+    React.createElement(Field,{label:"Status"},React.createElement(Sel,{value:f.status,onChange:e=>set("status",e.target.value)},["draft","active","completed","cancelled"].map(s=>React.createElement("option",{key:s,value:s},s)))),
+    React.createElement(Field,{label:"Description"},React.createElement(Tex,{value:f.description,onChange:e=>set("description",e.target.value)})),
+    React.createElement(Field,{label:"Notes"},React.createElement(Tex,{value:f.notes,onChange:e=>set("notes",e.target.value)})),
+    React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:8}},React.createElement(Btn,{variant:"secondary",onClick:onClose},"Cancel"),React.createElement(Btn,{onClick:save},"Save SOW")))
+}
+
+function DeliverableForm({initial,sows,onSave,onClose}){
+  const[f,setF]=useState(initial??{title:"",client:"",amountPayable:"",currency:"GBP",startDate:"",endDate:"",progress:0,status:"active",notes:"",sowId:""});
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const save=()=>{if(!f.title.trim()||!f.client.trim())return alert("Title and client are required");onSave({...f,amountPayable:+f.amountPayable||0,progress:+f.progress||0,sowId:f.sowId||null,createdAt:f.createdAt??nowIso()})};
+  const g={display:"grid",gridTemplateColumns:"1fr 1fr",gap:12};
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+    React.createElement(Field,{label:"Title",required},React.createElement(Inp,{value:f.title,onChange:e=>set("title",e.target.value)})),
+    React.createElement("div",{style:g},
+      React.createElement(Field,{label:"Client",required},React.createElement(Inp,{value:f.client,onChange:e=>set("client",e.target.value)})),
+      React.createElement(Field,{label:"SOW"},React.createElement(Sel,{value:f.sowId??'',onChange:e=>set("sowId",e.target.value)},React.createElement("option",{value:""},"None"),...sows.map(s=>React.createElement("option",{key:s.id,value:s.id},s.title+" ("+s.client+")"))))),
+    React.createElement("div",{style:g},React.createElement(Field,{label:"Amount Payable"},React.createElement(Inp,{type:"number",min:0,step:.01,value:f.amountPayable,onChange:e=>set("amountPayable",e.target.value)})),React.createElement(Field,{label:"Currency"},React.createElement(Sel,{value:f.currency,onChange:e=>set("currency",e.target.value)},CCYS.map(c=>React.createElement("option",{key:c,value:c},c))))),
+    React.createElement("div",{style:g},React.createElement(Field,{label:"Start Date"},React.createElement(Inp,{type:"date",value:f.startDate,onChange:e=>set("startDate",e.target.value)})),React.createElement(Field,{label:"End Date"},React.createElement(Inp,{type:"date",value:f.endDate,onChange:e=>set("endDate",e.target.value)}))),
+    React.createElement(Field,{label:`Progress: ${f.progress}%`},React.createElement("input",{type:"range",min:0,max:100,step:1,value:f.progress,onChange:e=>set("progress",+e.target.value),style:{width:"100%",marginTop:4}})),
+    React.createElement(Field,{label:"Status"},React.createElement(Sel,{value:f.status,onChange:e=>set("status",e.target.value)},["active","paused","completed","on-hold","blocked","invoiced"].map(s=>React.createElement("option",{key:s,value:s},s)))),
+    React.createElement(Field,{label:"Notes"},React.createElement(Tex,{value:f.notes,onChange:e=>set("notes",e.target.value)})),
+    React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:8}},React.createElement(Btn,{variant:"secondary",onClick:onClose},"Cancel"),React.createElement(Btn,{onClick:save},"Save Deliverable")))
+}
+
+function PrintView({inv,onClose}){
+  const sub=subTotal(inv.items),vat=sub*VAT,tot=sub+vat;
+  return React.createElement("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",alignItems:"flex-start",justifyContent:"center",overflow:"auto",padding:"24px 16px"}},
+    React.createElement("div",{style:{background:"#fff",borderRadius:12,width:"100%",maxWidth:640,boxShadow:"0 20px 60px rgba(0,0,0,.25)"}},
+      React.createElement("div",{className:"no-print",style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 24px",borderBottom:"1px solid #f1f5f9"}},
+        React.createElement("div",{style:{display:"flex",gap:8}},
+          React.createElement(Btn,{onClick:()=>window.print()},React.createElement(Printer,{size:14}),"Print / Save PDF"),
+          React.createElement(Btn,{variant:"secondary",onClick:onClose},React.createElement(X,{size:14}),"Close")),
+        React.createElement("span",{style:{fontSize:12,color:"#94a3b8"}},"Invoice Preview")),
+      React.createElement("div",{style:{padding:40}},
+        React.createElement("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:40}},
+          React.createElement("div",null,
+            React.createElement("h1",{style:{fontSize:28,fontWeight:800,color:"#1e293b",letterSpacing:-1}},"INVOICE"),
+            React.createElement("p",{style:{fontSize:16,color:"#64748b",marginTop:4}},"#"+inv.invoiceNumber)),
+          React.createElement("div",{style:{textAlign:"right"}},
+            React.createElement("p",{style:{fontSize:13,color:"#94a3b8"}},"Issue Date"),
+            React.createElement("p",{style:{fontWeight:600}},fmtDate(inv.issueDate)),
+            React.createElement("p",{style:{fontSize:13,color:"#94a3b8",marginTop:8}},"Due Date"),
+            React.createElement("p",{style:{fontWeight:600}},fmtDate(inv.dueDate)))),
+        React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:32,marginBottom:32}},
+          React.createElement("div",null,
+            React.createElement("p",{style:{fontSize:11,color:"#94a3b8",fontWeight:600,textTransform:"uppercase",letterSpacing:1,marginBottom:6}},"Bill To"),
+            React.createElement("p",{style:{fontWeight:700,fontSize:16}},inv.client),
+            inv.email&&React.createElement("p",{style:{color:"#64748b",fontSize:13}},inv.email),
+            inv.address&&React.createElement("p",{style:{color:"#64748b",fontSize:13,whiteSpace:"pre-line"}},inv.address)),
+          React.createElement("div",{style:{textAlign:"right"}},
+            React.createElement("p",{style:{fontSize:11,color:"#94a3b8",fontWeight:600,textTransform:"uppercase",letterSpacing:1,marginBottom:6}},"Status"),
+            React.createElement(InvBadge,{status:inv.status}))),
+        React.createElement("table",{style:{width:"100%",marginBottom:24}},
+          React.createElement("thead",null,React.createElement("tr",{style:{background:"#f8fafc"}},
+            ["Description","Qty","Rate","Amount"].map(h=>React.createElement("th",{key:h,style:{textAlign:h==="Description"?"left":"right",padding:"10px 12px",fontSize:11,color:"#64748b",fontWeight:700,textTransform:"uppercase",letterSpacing:.5,width:h==="Description"?undefined:h==="Qty"?60:100}},h)))),
+          React.createElement("tbody",null,...inv.items.map((it,i)=>React.createElement("tr",{key:i,style:{borderTop:"1px solid #f1f5f9"}},
+            React.createElement("td",{style:{padding:"10px 12px",fontSize:14}},it.desc||"—"),
+            React.createElement("td",{style:{padding:"10px 12px",textAlign:"right",fontSize:14}},it.qty),
+            React.createElement("td",{style:{padding:"10px 12px",textAlign:"right",fontSize:14}},fmt(+it.rate,inv.currency)),
+            React.createElement("td",{style:{padding:"10px 12px",textAlign:"right",fontSize:14}},fmt((+it.qty||0)*(+it.rate||0),inv.currency)))))),
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}},
+          React.createElement("div",{style:{display:"flex",gap:60,fontSize:13,color:"#64748b"}},React.createElement("span",null,"Subtotal"),React.createElement("span",null,fmt(sub,inv.currency))),
+          React.createElement("div",{style:{display:"flex",gap:60,fontSize:13,color:"#64748b"}},React.createElement("span",null,"VAT 20%"),React.createElement("span",null,fmt(vat,inv.currency))),
+          React.createElement("div",{style:{display:"flex",gap:60,fontSize:16,fontWeight:800,color:"#1e293b",borderTop:"2px solid #1e293b",paddingTop:8,marginTop:4}},React.createElement("span",null,"Total"),React.createElement("span",null,fmt(tot,inv.currency)))),
+        inv.notes&&React.createElement("div",{style:{marginTop:32,padding:"12px 16px",background:"#f8fafc",borderRadius:8}},
+          React.createElement("p",{style:{fontSize:11,color:"#94a3b8",fontWeight:600,textTransform:"uppercase",letterSpacing:1,marginBottom:4}},"Notes"),
+          React.createElement("p",{style:{fontSize:13,color:"#475569"}},inv.notes)))))
+}
+
+function DashboardPage({data}){
+  const{invoices,bills,deliverables}=data;
+  const totalRev=invoices.reduce((s,i)=>s+toGbp(i.total,i.currency),0);
+  const collected=invoices.filter(i=>i.status==="paid").reduce((s,i)=>s+toGbp(i.total,i.currency),0);
+  const outstanding=invoices.filter(i=>i.status==="pending").reduce((s,i)=>s+toGbp(i.total,i.currency),0);
+  const overdue=invoices.filter(i=>i.status==="overdue").reduce((s,i)=>s+toGbp(i.total,i.currency),0);
+  const totalBills=bills.reduce((s,b)=>s+toGbp(b.amount,b.currency),0);
+  const unpaidBills=bills.filter(b=>b.status!=="paid").reduce((s,b)=>s+toGbp(b.amount,b.currency),0);
+  const monthly=useMemo(()=>{
+    const now=new Date();
+    return Array.from({length:6},(_,i)=>{
+      const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);
+      const lbl=d.toLocaleDateString("en-GB",{month:"short",year:"2-digit"});
+      const rev=invoices.filter(inv=>{const r=inv.issueDate?new Date(inv.issueDate+"T00:00:00"):new Date(inv.createdAt);return r.getFullYear()===d.getFullYear()&&r.getMonth()===d.getMonth()}).reduce((s,inv)=>s+toGbp(inv.total,inv.currency),0);
+      const bls=bills.filter(b=>{const r=b.billDate?new Date(b.billDate+"T00:00:00"):new Date(b.createdAt);return r.getFullYear()===d.getFullYear()&&r.getMonth()===d.getMonth()}).reduce((s,b)=>s+toGbp(b.amount,b.currency),0);
+      return{label:lbl,revenue:Math.round(rev),bills:Math.round(bls)};
+    });
+  },[invoices,bills]);
+  const recentInv=[...invoices].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,5);
+  const activeDel=deliverables.filter(d=>d.status!=="completed");
+  const avgProg=activeDel.length===0?0:Math.round(activeDel.reduce((s,d)=>s+d.progress,0)/activeDel.length);
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:20}},
+    React.createElement("div",null,React.createElement("h1",{style:{fontSize:22,fontWeight:700,color:"#1e293b"}},"Dashboard"),React.createElement("p",{style:{fontSize:12,color:"#94a3b8",marginTop:2}},"All amounts in GBP")),
+    React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}},
+      React.createElement(StatCard,{label:"Total Revenue",value:fmt(totalRev),sub:`${invoices.length} invoices`,Icon:TrendingUp,color:"#2563eb",bgColor:"#eff6ff"}),
+      React.createElement(StatCard,{label:"Collected",value:fmt(collected),sub:`${invoices.filter(i=>i.status==="paid").length} paid`,Icon:CheckCircle2,color:"#059669",bgColor:"#ecfdf5"}),
+      React.createElement(StatCard,{label:"Outstanding",value:fmt(outstanding),sub:`${invoices.filter(i=>i.status==="pending").length} pending`,Icon:Clock,color:"#d97706",bgColor:"#fffbeb"}),
+      React.createElement(StatCard,{label:"Overdue",value:fmt(overdue),sub:`${invoices.filter(i=>i.status==="overdue").length} invoices`,Icon:AlertCircle,color:"#dc2626",bgColor:"#fef2f2"})),
+    React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}},
+      React.createElement(StatCard,{label:"Vendor Bills",value:fmt(totalBills),sub:`${bills.length} total`,Icon:Receipt,color:"#7c3aed",bgColor:"#f5f3ff"}),
+      React.createElement(StatCard,{label:"Unpaid Bills",value:fmt(unpaidBills),sub:`${bills.filter(b=>b.status!=="paid").length} unpaid`,Icon:DollarSign,color:"#ea580c",bgColor:"#fff7ed"})),
+    React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",padding:16}},
+      React.createElement("p",{style:{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:12,textTransform:"uppercase",letterSpacing:.5}},"Revenue vs Bills — Last 6 Months"),
+      React.createElement(ResponsiveContainer,{width:"100%",height:180},
+        React.createElement(BarChart,{data:monthly,barGap:2},
+          React.createElement(XAxis,{dataKey:"label",tick:{fontSize:10},axisLine:false,tickLine:false}),
+          React.createElement(YAxis,{tick:{fontSize:10},axisLine:false,tickLine:false,tickFormatter:v=>`£${(v/1000).toFixed(0)}k`}),
+          React.createElement(Tooltip,{formatter:(v,n)=>[fmt(v),n==="revenue"?"Revenue":"Bills"]}),
+          React.createElement(Bar,{dataKey:"revenue",fill:"#3b82f6",radius:[4,4,0,0]}),
+          React.createElement(Bar,{dataKey:"bills",fill:"#f59e0b",radius:[4,4,0,0]}))),
+      React.createElement("div",{style:{display:"flex",gap:16,justifyContent:"center",marginTop:8}},
+        React.createElement("span",{style:{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"#64748b"}},React.createElement("span",{style:{width:10,height:10,borderRadius:2,background:"#3b82f6",display:"inline-block"}}),"Revenue"),
+        React.createElement("span",{style:{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"#64748b"}},React.createElement("span",{style:{width:10,height:10,borderRadius:2,background:"#f59e0b",display:"inline-block"}}),"Bills"))),
+    React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}},
+      React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",padding:16}},
+        React.createElement("p",{style:{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:12,textTransform:"uppercase",letterSpacing:.5}},"Recent Invoices"),
+        recentInv.length===0?React.createElement("p",{style:{fontSize:12,color:"#94a3b8",textAlign:"center",padding:"16px 0"}},"No invoices yet"):
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10}},recentInv.map(inv=>React.createElement("div",{key:inv.id,style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          React.createElement("div",null,React.createElement("p",{style:{fontSize:13,fontWeight:600,color:"#1e293b"}},inv.invoiceNumber),React.createElement("p",{style:{fontSize:11,color:"#94a3b8"}},inv.client)),
+          React.createElement("div",{style:{textAlign:"right"}},React.createElement(InvBadge,{status:inv.status}),React.createElement("p",{style:{fontSize:11,color:"#64748b",marginTop:3}},fmt(inv.total,inv.currency))))))),
+      React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",padding:16}},
+        React.createElement("p",{style:{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:8,textTransform:"uppercase",letterSpacing:.5}},"Deliverables"),
+        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:12}},
+          React.createElement("div",{style:{flex:1,background:"#f1f5f9",borderRadius:99,height:6}},React.createElement("div",{style:{background:"#3b82f6",height:6,borderRadius:99,width:avgProg+"%",transition:"width .3s"}})),
+          React.createElement("span",{style:{fontSize:13,fontWeight:700,color:"#1e293b",minWidth:30}},avgProg+"%")),
+        React.createElement("p",{style:{fontSize:11,color:"#94a3b8",marginBottom:10}},activeDel.length+" active of "+deliverables.length+" total"),
+        deliverables.slice(0,4).map(d=>React.createElement("div",{key:d.id,style:{marginBottom:8}},
+          React.createElement("div",{style:{display:"flex",justifyContent:"space-between",fontSize:11,color:"#475569",marginBottom:2}},React.createElement("span",{style:{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"80%"}},d.title),React.createElement("span",null,d.progress+"%")),
+          React.createElement("div",{style:{background:"#f1f5f9",borderRadius:99,height:4}},React.createElement("div",{style:{background:"#93c5fd",height:4,borderRadius:99,width:d.progress+"%"}})))))))
+}
+
+function listPage(entity,singular,cols,BadgeComp,FormComp,tabs,data,dispatch,extraProps){
+  const[search,setSearch]=useState("");
+  const[tab,setTab]=useState("all");
+  const[modal,setModal]=useState(null);
+  const[confirm,setConfirm]=useState(null);
+  const items=data[entity];
+  const filtered=items.filter(x=>{if(tab!=="all"&&x.status!==tab)return false;const q=search.toLowerCase();if(q&&!cols.some(c=>c.search&&String(x[c.key]||"").toLowerCase().includes(q)))return false;return true}).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const save=item=>{const isNew=!item.id;dispatch({type:isNew?`ADD_${entity.toUpperCase().slice(0,-1)}`:`UPD_${entity.toUpperCase().slice(0,-1)}`,payload:{...item,id:item.id??uid()}});setModal(null)};
+  const del=id=>{dispatch({type:`DEL_${entity.toUpperCase().slice(0,-1)}`,payload:id});setConfirm(null)};
+  return{filtered,tab,setTab,search,setSearch,modal,setModal,confirm,setConfirm,save,del,tabs}
+}
+
+function InvoicesPage({data,dispatch}){
+  const[search,setSearch]=useState("");const[tab,setTab]=useState("all");const[modal,setModal]=useState(null);const[printInv,setPrintInv]=useState(null);const[confirm,setConfirm]=useState(null);
+  const filtered=data.invoices.filter(inv=>{if(tab!=="all"&&inv.status!==tab)return false;const q=search.toLowerCase();if(q&&!inv.invoiceNumber.toLowerCase().includes(q)&&!inv.client.toLowerCase().includes(q))return false;return true}).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const save=inv=>{const isNew=!inv.id;dispatch({type:isNew?"ADD_INVOICE":"UPD_INVOICE",payload:{...inv,id:inv.id??uid()}});setModal(null)};
+  const del=id=>{dispatch({type:"DEL_INVOICE",payload:id});setConfirm(null)};
+  const TH=s=>React.createElement("th",{key:s,style:{textAlign:s==="Total"?"right":"left",padding:"10px 16px",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:.5}},s);
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:16,height:"100%"}},
+    React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},React.createElement("h1",{style:{fontSize:22,fontWeight:700,color:"#1e293b"}},"Invoices"),React.createElement(Btn,{onClick:()=>setModal({})},React.createElement(PlusCircle,{size:14}),"New Invoice")),
+    React.createElement("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
+      React.createElement("div",{style:{position:"relative",flex:1,minWidth:160}},React.createElement(Search,{size:14,style:{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#94a3b8"}}),React.createElement(Inp,{value:search,onChange:e=>setSearch(e.target.value),placeholder:"Search...",style:{paddingLeft:30}})),
+      ["all","draft","pending","paid","overdue"].map(t=>React.createElement("button",{key:t,onClick:()=>setTab(t),style:{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",background:tab===t?"#1e293b":"#f1f5f9",color:tab===t?"#fff":"#64748b",textTransform:"capitalize",whiteSpace:"nowrap"}},t))),
+    React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",overflow:"hidden",flex:1,overflowX:"auto"}},
+      React.createElement("table",null,
+        React.createElement("thead",null,React.createElement("tr",{style:{background:"#f8fafc",borderBottom:"1px solid #f1f5f9"}},["Invoice #","Client","Issue Date","Due Date","Total","Status",""].map(TH))),
+        React.createElement("tbody",null,filtered.length===0?React.createElement("tr",null,React.createElement("td",{colSpan:7,style:{textAlign:"center",padding:40,color:"#94a3b8",fontSize:13}},"No invoices found")):
+          filtered.map(inv=>React.createElement("tr",{key:inv.id,style:{borderBottom:"1px solid #f8fafc"}},
+            React.createElement("td",{style:{padding:"12px 16px",fontWeight:600,fontSize:13,color:"#1e293b"}}," "+inv.invoiceNumber),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#475569"}},inv.client),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b"}},fmtDate(inv.issueDate)),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b"}},fmtDate(inv.dueDate)),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,fontWeight:600,textAlign:"right",color:"#1e293b"}},fmt(inv.total,inv.currency)),
+            React.createElement("td",{style:{padding:"12px 16px"}},React.createElement(InvBadge,{status:inv.status})),
+            React.createElement("td",{style:{padding:"12px 12px 12px 4px"}},React.createElement("div",{style:{display:"flex",gap:4}},
+              React.createElement("button",{onClick:()=>setPrintInv(inv),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,borderRadius:6,display:"flex"}},React.createElement(Printer,{size:14})),
+              React.createElement("button",{onClick:()=>setModal(inv),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,borderRadius:6,display:"flex"}},React.createElement(Edit2,{size:14})),
+              React.createElement("button",{onClick:()=>setConfirm(inv.id),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,borderRadius:6,display:"flex"}},React.createElement(Trash2,{size:14})))))))),
+    modal!==null&&React.createElement(Modal,{title:modal.id?"Edit Invoice":"New Invoice",onClose:()=>setModal(null),wide:true},React.createElement(InvoiceForm,{initial:modal.id?modal:null,onSave:save,onClose:()=>setModal(null)})),
+    printInv&&React.createElement(PrintView,{inv:printInv,onClose:()=>setPrintInv(null)}),
+    confirm&&React.createElement(Modal,{title:"Delete Invoice",onClose:()=>setConfirm(null)},React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:16}},React.createElement("p",{style:{color:"#475569"}},"Delete this invoice? This cannot be undone."),React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8}},React.createElement(Btn,{variant:"secondary",onClick:()=>setConfirm(null)},"Cancel"),React.createElement(Btn,{variant:"danger",onClick:()=>del(confirm)},"Delete")))))
+}
+
+function BillsPage({data,dispatch}){
+  const[search,setSearch]=useState("");const[tab,setTab]=useState("all");const[modal,setModal]=useState(null);const[confirm,setConfirm]=useState(null);
+  const filtered=data.bills.filter(b=>{if(tab!=="all"&&b.status!==tab)return false;const q=search.toLowerCase();if(q&&!b.vendor.toLowerCase().includes(q)&&!(b.reference||"").toLowerCase().includes(q))return false;return true}).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const save=bill=>{const isNew=!bill.id;dispatch({type:isNew?"ADD_BILL":"UPD_BILL",payload:{...bill,id:bill.id??uid()}});setModal(null)};
+  const del=id=>{dispatch({type:"DEL_BILL",payload:id});setConfirm(null)};
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:16}},
+    React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},React.createElement("h1",{style:{fontSize:22,fontWeight:700,color:"#1e293b"}},"Vendor Bills"),React.createElement(Btn,{onClick:()=>setModal({})},React.createElement(PlusCircle,{size:14}),"Add Bill")),
+    React.createElement("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
+      React.createElement("div",{style:{position:"relative",flex:1,minWidth:160}},React.createElement(Search,{size:14,style:{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#94a3b8"}}),React.createElement(Inp,{value:search,onChange:e=>setSearch(e.target.value),placeholder:"Search bills...",style:{paddingLeft:30}})),
+      ["all","unpaid","paid","overdue"].map(t=>React.createElement("button",{key:t,onClick:()=>setTab(t),style:{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",background:tab===t?"#1e293b":"#f1f5f9",color:tab===t?"#fff":"#64748b",textTransform:"capitalize"}},t))),
+    React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",overflow:"hidden",overflowX:"auto"}},
+      React.createElement("table",null,
+        React.createElement("thead",null,React.createElement("tr",{style:{background:"#f8fafc",borderBottom:"1px solid #f1f5f9"}},["Vendor","Reference","Bill Date","Due Date","Amount","Status",""].map(h=>React.createElement("th",{key:h,style:{textAlign:h==="Amount"?"right":"left",padding:"10px 16px",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:.5}},h)))),
+        React.createElement("tbody",null,filtered.length===0?React.createElement("tr",null,React.createElement("td",{colSpan:7,style:{textAlign:"center",padding:40,color:"#94a3b8",fontSize:13}},"No bills found")):
+          filtered.map(b=>React.createElement("tr",{key:b.id,style:{borderBottom:"1px solid #f8fafc"}},
+            React.createElement("td",{style:{padding:"12px 16px",fontWeight:600,fontSize:13,color:"#1e293b"}},b.vendor),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b"}},b.reference||"—"),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b"}},fmtDate(b.billDate)),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b"}},fmtDate(b.dueDate)),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,fontWeight:600,textAlign:"right",color:"#1e293b"}},fmt(b.amount,b.currency)),
+            React.createElement("td",{style:{padding:"12px 16px"}},React.createElement(BillBadge,{status:b.status})),
+            React.createElement("td",{style:{padding:"12px 12px 12px 4px"}},React.createElement("div",{style:{display:"flex",gap:4}},
+              React.createElement("button",{onClick:()=>setModal(b),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,borderRadius:6,display:"flex"}},React.createElement(Edit2,{size:14})),
+              React.createElement("button",{onClick:()=>setConfirm(b.id),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,borderRadius:6,display:"flex"}},React.createElement(Trash2,{size:14})))))))),
+    modal!==null&&React.createElement(Modal,{title:modal.id?"Edit Bill":"Add Bill",onClose:()=>setModal(null)},React.createElement(BillForm,{initial:modal.id?modal:null,onSave:save,onClose:()=>setModal(null)})),
+    confirm&&React.createElement(Modal,{title:"Delete Bill",onClose:()=>setConfirm(null)},React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:16}},React.createElement("p",{style:{color:"#475569"}},"Delete this bill?"),React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8}},React.createElement(Btn,{variant:"secondary",onClick:()=>setConfirm(null)},"Cancel"),React.createElement(Btn,{variant:"danger",onClick:()=>del(confirm)},"Delete")))))
+}
+
+function SowsPage({data,dispatch}){
+  const[search,setSearch]=useState("");const[tab,setTab]=useState("all");const[modal,setModal]=useState(null);const[confirm,setConfirm]=useState(null);
+  const filtered=data.sows.filter(s=>{if(tab!=="all"&&s.status!==tab)return false;const q=search.toLowerCase();if(q&&!s.title.toLowerCase().includes(q)&&!s.client.toLowerCase().includes(q))return false;return true}).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const save=sow=>{const isNew=!sow.id;dispatch({type:isNew?"ADD_SOW":"UPD_SOW",payload:{...sow,id:sow.id??uid()}});setModal(null)};
+  const del=id=>{dispatch({type:"DEL_SOW",payload:id});setConfirm(null)};
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:16}},
+    React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},React.createElement("h1",{style:{fontSize:22,fontWeight:700,color:"#1e293b"}},"Statements of Work"),React.createElement(Btn,{onClick:()=>setModal({})},React.createElement(PlusCircle,{size:14}),"New SOW")),
+    React.createElement("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
+      React.createElement("div",{style:{position:"relative",flex:1,minWidth:160}},React.createElement(Search,{size:14,style:{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#94a3b8"}}),React.createElement(Inp,{value:search,onChange:e=>setSearch(e.target.value),placeholder:"Search SOWs...",style:{paddingLeft:30}})),
+      ["all","draft","active","completed","cancelled"].map(t=>React.createElement("button",{key:t,onClick:()=>setTab(t),style:{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",background:tab===t?"#1e293b":"#f1f5f9",color:tab===t?"#fff":"#64748b",textTransform:"capitalize"}},t))),
+    React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",overflow:"hidden",overflowX:"auto"}},
+      React.createElement("table",null,
+        React.createElement("thead",null,React.createElement("tr",{style:{background:"#f8fafc",borderBottom:"1px solid #f1f5f9"}},["Title","Client","Reference","Value","Start","End","Status",""].map(h=>React.createElement("th",{key:h,style:{textAlign:h==="Value"?"right":"left",padding:"10px 16px",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:.5}},h)))),
+        React.createElement("tbody",null,filtered.length===0?React.createElement("tr",null,React.createElement("td",{colSpan:8,style:{textAlign:"center",padding:40,color:"#94a3b8",fontSize:13}},"No SOWs found")):
+          filtered.map(s=>React.createElement("tr",{key:s.id,style:{borderBottom:"1px solid #f8fafc"}},
+            React.createElement("td",{style:{padding:"12px 16px",fontWeight:600,fontSize:13,color:"#1e293b"}},s.title),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#475569"}},s.client),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b"}},s.reference||"—"),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,fontWeight:600,textAlign:"right",color:"#1e293b"}},s.value!=null?fmt(s.value,s.currency):"—"),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b"}},fmtDate(s.startDate)),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b"}},fmtDate(s.endDate)),
+            React.createElement("td",{style:{padding:"12px 16px"}},React.createElement(SowBadge,{status:s.status})),
+            React.createElement("td",{style:{padding:"12px 12px 12px 4px"}},React.createElement("div",{style:{display:"flex",gap:4}},
+              React.createElement("button",{onClick:()=>setModal(s),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,borderRadius:6,display:"flex"}},React.createElement(Edit2,{size:14})),
+              React.createElement("button",{onClick:()=>setConfirm(s.id),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,borderRadius:6,display:"flex"}},React.createElement(Trash2,{size:14})))))))),
+    modal!==null&&React.createElement(Modal,{title:modal.id?"Edit SOW":"New SOW",onClose:()=>setModal(null)},React.createElement(SowForm,{initial:modal.id?modal:null,onSave:save,onClose:()=>setModal(null)})),
+    confirm&&React.createElement(Modal,{title:"Delete SOW",onClose:()=>setConfirm(null)},React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:16}},React.createElement("p",{style:{color:"#475569"}},"Delete this SOW?"),React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8}},React.createElement(Btn,{variant:"secondary",onClick:()=>setConfirm(null)},"Cancel"),React.createElement(Btn,{variant:"danger",onClick:()=>del(confirm)},"Delete")))))
+}
+
+function DeliverablesPage({data,dispatch}){
+  const[search,setSearch]=useState("");const[tab,setTab]=useState("all");const[modal,setModal]=useState(null);const[confirm,setConfirm]=useState(null);
+  const filtered=data.deliverables.filter(d=>{if(tab!=="all"&&d.status!==tab)return false;const q=search.toLowerCase();if(q&&!d.title.toLowerCase().includes(q)&&!d.client.toLowerCase().includes(q))return false;return true}).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const save=d=>{const isNew=!d.id;dispatch({type:isNew?"ADD_DEL":"UPD_DEL",payload:{...d,id:d.id??uid()}});setModal(null)};
+  const del=id=>{dispatch({type:"DEL_DEL",payload:id});setConfirm(null)};
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:16}},
+    React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},React.createElement("h1",{style:{fontSize:22,fontWeight:700,color:"#1e293b"}},"Deliverables"),React.createElement(Btn,{onClick:()=>setModal({})},React.createElement(PlusCircle,{size:14}),"Add Deliverable")),
+    React.createElement("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
+      React.createElement("div",{style:{position:"relative",flex:1,minWidth:160}},React.createElement(Search,{size:14,style:{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#94a3b8"}}),React.createElement(Inp,{value:search,onChange:e=>setSearch(e.target.value),placeholder:"Search...",style:{paddingLeft:30}})),
+      ["all","active","paused","completed","blocked"].map(t=>React.createElement("button",{key:t,onClick:()=>setTab(t),style:{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",background:tab===t?"#1e293b":"#f1f5f9",color:tab===t?"#fff":"#64748b",textTransform:"capitalize"}},t))),
+    React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",overflow:"hidden",overflowX:"auto"}},
+      React.createElement("table",null,
+        React.createElement("thead",null,React.createElement("tr",{style:{background:"#f8fafc",borderBottom:"1px solid #f1f5f9"}},["Title","Client","Progress","Amount","Status",""].map(h=>React.createElement("th",{key:h,style:{textAlign:h==="Amount"?"right":"left",padding:"10px 16px",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:.5}},h)))),
+        React.createElement("tbody",null,filtered.length===0?React.createElement("tr",null,React.createElement("td",{colSpan:6,style:{textAlign:"center",padding:40,color:"#94a3b8",fontSize:13}},"No deliverables found")):
+          filtered.map(d=>React.createElement("tr",{key:d.id,style:{borderBottom:"1px solid #f8fafc"}},
+            React.createElement("td",{style:{padding:"12px 16px",fontWeight:600,fontSize:13,color:"#1e293b"}},d.title),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#475569"}},d.client),
+            React.createElement("td",{style:{padding:"12px 16px",minWidth:140}},React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},React.createElement("div",{style:{flex:1,background:"#f1f5f9",borderRadius:99,height:6}},React.createElement("div",{style:{background:DEL_C[d.status]??"#3b82f6",height:6,borderRadius:99,width:d.progress+"%"}})),React.createElement("span",{style:{fontSize:11,color:"#64748b",minWidth:28,textAlign:"right"}},d.progress+"%"))),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,fontWeight:600,textAlign:"right",color:"#1e293b"}},fmt(d.amountPayable,d.currency)),
+            React.createElement("td",{style:{padding:"12px 16px"}},React.createElement(DelBadge,{status:d.status})),
+            React.createElement("td",{style:{padding:"12px 12px 12px 4px"}},React.createElement("div",{style:{display:"flex",gap:4}},
+              React.createElement("button",{onClick:()=>setModal(d),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,borderRadius:6,display:"flex"}},React.createElement(Edit2,{size:14})),
+              React.createElement("button",{onClick:()=>setConfirm(d.id),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",padding:4,borderRadius:6,display:"flex"}},React.createElement(Trash2,{size:14})))))))),
+    modal!==null&&React.createElement(Modal,{title:modal.id?"Edit Deliverable":"Add Deliverable",onClose:()=>setModal(null)},React.createElement(DeliverableForm,{initial:modal.id?modal:null,sows:data.sows,onSave:save,onClose:()=>setModal(null)})),
+    confirm&&React.createElement(Modal,{title:"Delete Deliverable",onClose:()=>setConfirm(null)},React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:16}},React.createElement("p",{style:{color:"#475569"}},"Delete this deliverable?"),React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",gap:8}},React.createElement(Btn,{variant:"secondary",onClick:()=>setConfirm(null)},"Cancel"),React.createElement(Btn,{variant:"danger",onClick:()=>del(confirm)},"Delete")))))
+}
+
+function ClientsPage({data,setPage,setClientName}){
+  const{invoices,sows,deliverables}=data;
+  const[search,setSearch]=useState("");
+  const clients=useMemo(()=>{
+    const map=new Map();
+    const ensure=name=>{const k=name.trim().toLowerCase();if(!map.has(k))map.set(k,{name:name.trim(),invoices:[],sows:[],deliverables:[]});return map.get(k)};
+    invoices.forEach(i=>ensure(i.client).invoices.push(i));
+    sows.forEach(s=>ensure(s.client).sows.push(s));
+    deliverables.forEach(d=>ensure(d.client).deliverables.push(d));
+    return Array.from(map.values()).map(c=>{
+      const totalInv=c.invoices.reduce((s,i)=>s+toGbp(i.total,i.currency),0);
+      const coll=c.invoices.filter(i=>i.status==="paid").reduce((s,i)=>s+toGbp(i.total,i.currency),0);
+      const outstanding=totalInv-coll;
+      const contractVal=c.sows.reduce((s,sow)=>s+(sow.value?toGbp(sow.value,sow.currency):0),0);
+      return{name:c.name,invoiceCount:c.invoices.length,sowCount:c.sows.length,deliverableCount:c.deliverables.length,totalInvoiced:totalInv,collected:coll,outstanding,contractValue:contractVal};
+    }).sort((a,b)=>b.outstanding-a.outstanding||a.name.localeCompare(b.name));
+  },[invoices,sows,deliverables]);
+  const filtered=clients.filter(c=>!search||c.name.toLowerCase().includes(search.toLowerCase()));
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:16}},
+    React.createElement("h1",{style:{fontSize:22,fontWeight:700,color:"#1e293b"}},"Clients"),
+    React.createElement("div",{style:{position:"relative"}},React.createElement(Search,{size:14,style:{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#94a3b8"}}),React.createElement(Inp,{value:search,onChange:e=>setSearch(e.target.value),placeholder:"Search clients...",style:{paddingLeft:30}})),
+    React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",overflow:"hidden",overflowX:"auto"}},
+      React.createElement("table",null,
+        React.createElement("thead",null,React.createElement("tr",{style:{background:"#f8fafc",borderBottom:"1px solid #f1f5f9"}},["Client","Invoices","SOWs","Contract Value","Invoiced","Outstanding",""].map(h=>React.createElement("th",{key:h,style:{textAlign:["Contract Value","Invoiced","Outstanding"].includes(h)?"right":"left",padding:"10px 16px",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:.5}},h)))),
+        React.createElement("tbody",null,filtered.length===0?React.createElement("tr",null,React.createElement("td",{colSpan:7,style:{textAlign:"center",padding:40,color:"#94a3b8",fontSize:13}},"No clients yet")):
+          filtered.map(c=>React.createElement("tr",{key:c.name,style:{borderBottom:"1px solid #f8fafc",cursor:"pointer"},onClick:()=>{setClientName(c.name);setPage("client-detail")}},
+            React.createElement("td",{style:{padding:"12px 16px",fontWeight:700,fontSize:13,color:"#1e293b"}},c.name),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b",textAlign:"center"}},c.invoiceCount),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,color:"#64748b",textAlign:"center"}},c.sowCount),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,fontWeight:600,textAlign:"right",color:"#1e293b"}},fmt(c.contractValue)),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,fontWeight:600,textAlign:"right",color:"#059669"}},fmt(c.totalInvoiced)),
+            React.createElement("td",{style:{padding:"12px 16px",fontSize:13,fontWeight:600,textAlign:"right",color:c.outstanding>0?"#d97706":"#64748b"}},fmt(c.outstanding)),
+            React.createElement("td",{style:{padding:"12px 16px"}},React.createElement(ChevronRight,{size:14,style:{color:"#cbd5e1"}})))))));
+}
+
+function ClientDetailPage({data,clientName,setPage}){
+  const{invoices,sows,deliverables}=data;
+  const k=clientName.trim().toLowerCase();
+  const cInv=invoices.filter(i=>i.client.trim().toLowerCase()===k);
+  const cSow=sows.filter(s=>s.client.trim().toLowerCase()===k);
+  const cDel=deliverables.filter(d=>d.client.trim().toLowerCase()===k);
+  const totalInv=cInv.reduce((s,i)=>s+toGbp(i.total,i.currency),0);
+  const coll=cInv.filter(i=>i.status==="paid").reduce((s,i)=>s+toGbp(i.total,i.currency),0);
+  const outstanding=totalInv-coll;
+  const contractVal=cSow.reduce((s,sow)=>s+(sow.value?toGbp(sow.value,sow.currency):0),0);
+  const SH=s=>React.createElement("th",{key:s,style:{textAlign:["Value","Total","Amount"].some(x=>s.includes(x))?"right":"left",padding:"8px 16px",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:.5}},s);
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:20}},
+    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:12}},
+      React.createElement("button",{onClick:()=>setPage("clients"),style:{background:"none",border:"none",cursor:"pointer",color:"#94a3b8",fontSize:13,display:"flex",alignItems:"center",gap:4}},React.createElement(ChevronRight,{size:14,style:{transform:"rotate(180deg)"}}),"Clients"),
+      React.createElement("h1",{style:{fontSize:22,fontWeight:700,color:"#1e293b"}},clientName)),
+    React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}},
+      React.createElement(StatCard,{label:"Contract Value",value:fmt(contractVal),Icon:ScrollText,color:"#7c3aed",bgColor:"#f5f3ff"}),
+      React.createElement(StatCard,{label:"Total Invoiced",value:fmt(totalInv),Icon:FileText,color:"#2563eb",bgColor:"#eff6ff"}),
+      React.createElement(StatCard,{label:"Outstanding",value:fmt(outstanding),Icon:AlertCircle,color:outstanding>0?"#d97706":"#059669",bgColor:outstanding>0?"#fffbeb":"#ecfdf5"})),
+    cInv.length>0&&React.createElement("div",{style:{background:"#fff",borderRadius:12,border:"1px solid #f1f5f9",overflow:"hidden"}},
+      React.createElement("div",{style:{padding:"14px 16px",borderBottom:"1px solid #f1f5f9"}},React.createElement("h3",{style:{fontSize:12,fontWeight:700,color:"#1e293b",textTransform:"uppercase",letterSpacing:.5}},"Invoices")),
+      React.createElement("table",null,React.createElement("thead",null,React.createElement("tr",{style:{background:"#f8fafc"}},["Invoice #","Issue Date","Due Date","Total","Status"].map(SH))),
+        React.createElement("tbody",null,cInv.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(inv=>React.createElement("tr",{key:inv.id,style:{borderTop:"1px solid #f8fafc"}},
+          React.createElement("td",{style:{padding:"10px 16px",fontSize:13,fontWeight:600,color:"#1e293b"}},inv.invoiceNumber),
+          React.createElement("td",{style:{padding:"10px 16px",fontSize:13,color:"#64748b"}},fmtDate(inv.issueDate)),
+          React.createElement("td",{style:{padding:"10px 16px",fontSize:13,color:"#64748b"}},fmtDate(inv.dueDate)),
+          React.createElement("td",{style:{padding:"10px 16px",fontSize:13,fontWeight:600,textAlign:"right"}},fmt(inv.total,inv.currency)),
+          React.createElement("td",{style:{padding:"10px 16px"}},React.createElement(InvBadge,{status:inv.status})))))));
+}
+
+function reducer(state,{type,payload}){
+  switch(type){
+    case"SET":return payload;
+    case"ADD_INVOICE":return{...state,invoices:[payload,...state.invoices]};
+    case"UPD_INVOICE":return{...state,invoices:state.invoices.map(i=>i.id===payload.id?payload:i)};
+    case"DEL_INVOICE":return{...state,invoices:state.invoices.filter(i=>i.id!==payload)};
+    case"ADD_BILL":return{...state,bills:[payload,...state.bills]};
+    case"UPD_BILL":return{...state,bills:state.bills.map(b=>b.id===payload.id?payload:b)};
+    case"DEL_BILL":return{...state,bills:state.bills.filter(b=>b.id!==payload)};
+    case"ADD_SOW":return{...state,sows:[payload,...state.sows]};
+    case"UPD_SOW":return{...state,sows:state.sows.map(s=>s.id===payload.id?payload:s)};
+    case"DEL_SOW":return{...state,sows:state.sows.filter(s=>s.id!==payload)};
+    case"ADD_DEL":return{...state,deliverables:[payload,...state.deliverables]};
+    case"UPD_DEL":return{...state,deliverables:state.deliverables.map(d=>d.id===payload.id?payload:d)};
+    case"DEL_DEL":return{...state,deliverables:state.deliverables.filter(d=>d.id!==payload)};
+    default:return state;
+  }
+}
+
+function App(){
+  const[data,dispatch_]=useReducer(reducer,null,loadData);
+  const[page,setPage]=useState("dashboard");
+  const[clientName,setClientName]=useState("");
+  const fileRef=useRef();
+  const dispatch=useCallback(a=>dispatch_(a),[]);
+
+  useEffect(()=>{saveData(data)},[data]);
+
+  const exportData=()=>{
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="invoicepro-export-"+today()+".json";a.click();URL.revokeObjectURL(url);
+  };
+  const importData=e=>{
+    const file=e.target.files[0];if(!file)return;
+    const r=new FileReader();
+    r.onload=ev=>{try{const d=JSON.parse(ev.target.result);if(!d.invoices||!d.bills)return alert("Invalid export file.");if(window.confirm("Import will replace ALL current data. Continue?")){dispatch({type:"SET",payload:{invoices:d.invoices||[],bills:d.bills||[],sows:d.sows||[],deliverables:d.deliverables||[]}})}}catch{alert("Could not parse file.")}};
+    r.readAsText(file);e.target.value="";
+  };
+
+  const NAV=[{id:"dashboard",label:"Dashboard",Icon:LayoutDashboard},{id:"invoices",label:"Invoices",Icon:FileText},{id:"bills",label:"Vendor Bills",Icon:Receipt},{id:"sows",label:"Statements of Work",Icon:ScrollText},{id:"deliverables",label:"Deliverables",Icon:Boxes},{id:"clients",label:"Clients",Icon:Users}];
+  const activePage=page==="client-detail"?"clients":page;
+
+  return React.createElement("div",{style:{display:"flex",height:"100vh",overflow:"hidden"}},
+    React.createElement("aside",{className:"no-print",style:{width:220,background:"#0f172a",display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto"}},
+      React.createElement("div",{style:{padding:"20px 16px 16px",borderBottom:"1px solid rgba(255,255,255,.08)"}},
+        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
+          React.createElement("div",{style:{width:32,height:32,background:"#3b82f6",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},React.createElement(FileText,{size:16,color:"#fff"})),
+          React.createElement("div",null,React.createElement("p",{style:{fontSize:13,fontWeight:700,color:"#f8fafc",lineHeight:1.2}},"InvoicePro"),React.createElement("p",{style:{fontSize:10,color:"#64748b",marginTop:2}},"Self-hosted")))),
+      React.createElement("nav",{style:{flex:1,padding:"10px 8px",display:"flex",flexDirection:"column",gap:2}},
+        NAV.map(({id,label,Icon})=>React.createElement("button",{key:id,onClick:()=>setPage(id),style:{display:"flex",alignItems:"center",gap:10,padding:"9px 10px",borderRadius:8,background:activePage===id?"rgba(59,130,246,.15)":"transparent",color:activePage===id?"#93c5fd":"#94a3b8",border:"none",cursor:"pointer",fontSize:13,fontWeight:activePage===id?600:400,transition:"all .15s",textAlign:"left",width:"100%"}},React.createElement(Icon,{size:15}),label)),
+        React.createElement("div",{style:{marginTop:16,borderTop:"1px solid rgba(255,255,255,.08)",paddingTop:10,display:"flex",flexDirection:"column",gap:2}},
+          React.createElement("button",{onClick:exportData,style:{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderRadius:8,background:"transparent",color:"#64748b",border:"none",cursor:"pointer",fontSize:12,width:"100%",textAlign:"left"}},React.createElement(Download,{size:13}),"Export Data"),
+          React.createElement("button",{onClick:()=>fileRef.current.click(),style:{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderRadius:8,background:"transparent",color:"#64748b",border:"none",cursor:"pointer",fontSize:12,width:"100%",textAlign:"left"}},React.createElement(Upload,{size:13}),"Import Data"),
+          React.createElement("input",{ref:fileRef,type:"file",accept:".json",onChange:importData,style:{display:"none"}}))),
+      React.createElement("div",{style:{padding:"12px 16px",borderTop:"1px solid rgba(255,255,255,.06)"}},
+        React.createElement("p",{style:{fontSize:10,color:"#334155",lineHeight:1.6}},"Data stored in browser.\nExport regularly as backup."))),
+    React.createElement("main",{style:{flex:1,overflowY:"auto",background:"#f8fafc",padding:24}},
+      page==="dashboard"&&React.createElement(DashboardPage,{data}),
+      page==="invoices"&&React.createElement(InvoicesPage,{data,dispatch}),
+      page==="bills"&&React.createElement(BillsPage,{data,dispatch}),
+      page==="sows"&&React.createElement(SowsPage,{data,dispatch}),
+      page==="deliverables"&&React.createElement(DeliverablesPage,{data,dispatch}),
+      page==="clients"&&React.createElement(ClientsPage,{data,setPage,setClientName}),
+      page==="client-detail"&&React.createElement(ClientDetailPage,{data,clientName,setPage})))
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>
